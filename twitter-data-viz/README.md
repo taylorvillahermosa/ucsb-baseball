@@ -1,5 +1,6 @@
 # twitter-data-viz
-@SBBaseballData
+
+## [@SBBaseballData](https://twitter.com/SBBaseballData)
 
 <p>
     <img src="gif/exit_velo_vs_distance.gif" width=33%/>
