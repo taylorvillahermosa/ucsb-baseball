@@ -1,6 +1,6 @@
 # swing-efficiency
 
-<img align="right" width="100" height="100" src="img/ncaa_strike_zone.png">
+<img align="right" src="img/ncaa_strike_zone.png">
 The strike zone in NCAA Division I Baseball is defined as: "The area over home plate from the bottom of the kneecaps to the midpoint between the top of the shoulders and the top of the uniform pants. The strike zone shall be determined from the batter’s stance as the batter is prepared to swing at a pitched ball (see diagram below)."[[source]](https://baseballrulesacademy.com/official-rule/ncaa/ncaa-2-75-strike-zone/)
 
 
