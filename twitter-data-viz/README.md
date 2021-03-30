@@ -8,7 +8,7 @@
     <img src="gif/top_exit_velo.gif" width=33%/>
 </p>
 
-### libraries
+#### libraries
 - ggplot2, ggthemes
 - RColorBrewer, colorspace
 - gganimate, tweenr
