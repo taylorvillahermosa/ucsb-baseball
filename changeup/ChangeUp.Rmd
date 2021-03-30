@@ -1,0 +1,405 @@
+---
+title: "ChangeUp"
+author: "Taylor Villahermosa"
+output: pdf_document
+---
+\setlength{\belowdisplayskip}{0pt} \setlength{\belowdisplayshortskip}{0pt}
+\setlength{\abovedisplayskip}{0pt} \setlength{\abovedisplayshortskip}{0pt}
+```{r echo=FALSE, message=FALSE}
+library(dplyr)
+library(DBI)
+library(RSQLite)
+library(sqldf)
+library(ggplot2)
+```
+```{r creating ultimate}
+ultimate <- read.csv("/Users/taylorvillahermosa/Desktop/NewUltimateBBScore.csv")
+
+# Add strike and whiff count to ultimate
+ultimate <- ultimate %>% 
+  mutate(Strike = ifelse(PitchCall %in% c("StrikeSwinging","StrikeCalled",
+                                          "FoulBall","InPlay"), 1, 0)) %>%
+  mutate(Whiff = ifelse(PitchCall=="StrikeSwinging",1,0))
+
+# Create data base
+master_db <- dbConnect(RSQLite::SQLite(), "master_db.sqlite")
+dbWriteTable(master_db,"ULTIMATE",ultimate,overwrite=TRUE)
+
+master <- as.data.frame(dbGetQuery(master_db, 'SELECT PitchNo, Batter, Pitcher, 
+                                                  TaggedPitchType, RelSpeed, 
+                                                  PitchCall, Strikes, InducedVertBreak,
+                                                  Strike, Whiff, ExitSpeed, BBScore
+                                                  FROM ULTIMATE'))
+# Remove undefined pitches
+x <- subset(master, !(is.na(Batter)) | is.na(TaggedPitchType))
+
+# Create new columns for Diff and Prop
+x$VBDiff <- NA
+x$VBProp <- NA
+x$VeloDiff <- NA
+x$VeloProp <- NA
+
+for(i in 1:(nrow(x)-1)){  
+  if (x[i,"TaggedPitchType"] == "Fastball" &&    # 1st pitch FB
+      x[i+1,"TaggedPitchType"] == "ChangeUp" &&  # 2nd pitch U
+      x[i,"Batter"] == x[i+1,"Batter"] &&        # same at bat
+      x[i,"Pitcher"] == x[i+1,"Pitcher"])
+        {
+        x[i+1,"VBDiff"] <- x[i,"InducedVertBreak"] - x[i+1,"InducedVertBreak"]
+        x[i+1,"VBProp"] <- 1 - (x[i+1,"InducedVertBreak"]/x[i,"InducedVertBreak"])
+        x[i+1,"VeloDiff"] <- x[i,"RelSpeed"] - x[i+1,"RelSpeed"] 
+        x[i+1,"VeloProp"] <- 1 - (x[i+1,"RelSpeed"]/x[i,"RelSpeed"])
+        }
+}
+
+# Remove non-ChangeUps and outliers
+hi <- x
+
+
+x <- subset(x, !is.na(VeloDiff))# & VBProp > 0) 
+x <- subset(x, VBProp > 0)
+x_rounded <- x %>%
+  mutate(VeloDiff = round((VeloDiff/2))*2) %>%  # velo diff to 2
+  mutate(VeloProp = (round(VeloProp/2, digits = 2)*2)) %>%  # velo prop to 0.02 (2%)
+  mutate(Velo = round((RelSpeed)/5, digits = 1)*5) %>%  # velo to 0.5
+  mutate(VBDiff = round((VBDiff))) %>%  # vb diff to 1
+  mutate(VBProp = (round(VBProp/10, digits=2)*10))  # vb prop to 0.1 (10%)
+
+```
+\newpage  
+## Subsetting
+```{r subset data}
+dbWriteTable(master_db,"subset",x,overwrite=TRUE)
+dbWriteTable(master_db,"subset2",x_rounded,overwrite=TRUE)
+
+# VB Prop and VB Diff
+t <- as.data.frame(dbGetQuery(master_db, 'SELECT VeloDiff, VBDiff,
+                                            round(100*VeloProp,1) AS VeloProp,
+                                            round(100*VBProp,1) AS VBProp,
+                                            round((ExitSpeed),1) AS "ExitVelo"
+                                            FROM subset'))
+
+# VB Diff (avg ev & whiff %)
+dw <- as.data.frame(dbGetQuery(master_db, 'SELECT VBDiff,
+                                            COUNT(*) AS "PitchCount", 
+                                            round(SUM(Whiff)/COUNT(*)*100,1) AS "Whiff%",
+                                            round(AVG(ExitSpeed),1) AS "ExitVelo"
+                                            FROM subset2 GROUP BY VBDiff'))
+dw <- subset(dw, PitchCount > 100)
+
+# VB Prop (avg ev & whiff %)
+pw <- as.data.frame(dbGetQuery(master_db, 'SELECT VBProp,
+                                            COUNT(*) AS "PitchCount", 
+                                            round(SUM(Whiff)/COUNT(*)*100,1) AS "Whiff%",
+                                            round(AVG(ExitSpeed),1) AS "ExitVelo"
+                                            FROM subset2 GROUP BY VBProp'))
+pw <- subset(pw, PitchCount > 100)
+
+# Velo Diff (avg ev & whiff %)
+z <- as.data.frame(dbGetQuery(master_db, 'SELECT VeloDiff, 
+                                            COUNT(*) AS "PitchCount", 
+                                            round(SUM(Whiff)/COUNT(*)*100,1) AS "Whiff%",
+                                            round(AVG(ExitSpeed),1) AS "ExitVelo"
+                                            FROM subset2 GROUP BY VeloDiff'))
+z <- subset(z, PitchCount > 100)
+
+# Velo Prop (avg ev & whiff %)
+z2 <- as.data.frame(dbGetQuery(master_db, 'SELECT VeloProp,
+                                            COUNT(*) AS "PitchCount", 
+                                            round(SUM(Whiff)/COUNT(*)*100,1) AS "Whiff%",
+                                            round(AVG(ExitSpeed),1) AS "ExitVelo"
+                                            FROM subset2 GROUP BY VeloProp'))
+z2 <- subset(z2, PitchCount > 100)
+
+# Plot Labels
+D <- "Velo Differential"
+P <- "Velo Proportion"
+VD <- "VB Differential"
+VP <- "VB Proportion"
+W <- "Whiff %"
+E <- "Exit Velo"
+```
+```{r}
+# ev velo prop
+grape <- x_rounded %>% filter(VeloProp >= 0.04 & VeloProp < .145)
+turtle <- grape %>% group_by(VeloProp) %>% sample_n(100) 
+dolphin <- turtle %>% summarise(ExitVelo = mean(na.omit(ExitSpeed)))
+
+
+ggplot(dolphin,aes(VeloProp,ExitVelo))+
+  geom_smooth(method = "loess",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",P))+labs(x=P,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+fit <- lm(ExitVelo~VeloProp, data = dolphin)
+summary(fit)
+
+a1 <- x_rounded %>% filter(VeloDiff >= 3.5 & VeloDiff < 13)
+a2 <- a1 %>% group_by(VeloDiff) %>% sample_n(100) 
+a3 <- a2 %>% summarise(ExitVelo = mean(na.omit(ExitSpeed)))
+
+ggplot(a3,aes(VeloDiff,ExitVelo))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",D))+labs(x=D,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+#fit <- lm(ExitVelo~VeloDiff, data = a3)
+#summary(fit)
+```
+\newpage
+## FB-U Velocity Proportion/Differential
+```{r fig.height = 8, fig.width=7}
+sloth <- subset(na.omit(t), -100 < VeloProp & VeloProp < 100 & VeloDiff > 0)
+
+# (1) ev vs velo diff
+ev_velodiff  <- ggplot(sloth,aes(VeloDiff,ExitVelo))+
+  geom_point(size=0.2)+
+  ggtitle(paste0(E," vs. ",D))+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (2) ev vs velo prop
+ev_veloprop <- ggplot(sloth,aes(VeloProp,ExitVelo))+
+  geom_point(size=0.2)+
+  ggtitle(paste0(E," vs. ",P))+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (3) avg ev vs velo diff
+avg_ev_velodiff <- ggplot(z,aes(VeloDiff,ExitVelo))+
+  geom_smooth(method = "loess",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",D))+labs(x=D,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (4) avg ev vs velo prop
+avg_ev_veloprop <- ggplot(z2,aes(VeloProp,ExitVelo))+
+  geom_smooth(method = "loess",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",P))+labs(x=P,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (5) whiff vs velo diff
+w_velodiff <- ggplot(z,aes(VeloDiff,`Whiff%`))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0(W," vs. ",D))+labs(x=D,y=W)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (6) whiff vs velo prop
+w_veloprop <- ggplot(z2,aes(VeloProp,`Whiff%`))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0(W," vs. ",P))+labs(x=P,y=W)+
+  theme(plot.title = element_text(hjust =0.5))
+
+cowplot::plot_grid(ev_velodiff,ev_veloprop,
+                   avg_ev_velodiff, avg_ev_veloprop,
+                   w_velodiff, w_veloprop,
+                   ncol=2,labels=1:6)
+```
+\newpage
+```{r}
+# (5) whiff vs velo diff
+fit5 <- lm(`Whiff%`~VeloDiff, data = z)
+summary(fit5)
+# (6) whiff vs velo prop
+fit6 <- lm(`Whiff%`~VeloProp, data = z2)
+summary(fit6)
+```
+\newpage
+## Vertical Break 
+```{r fig.height = 8, fig.width=7}
+giraffe <- subset(na.omit(t), -100 < VBProp & VBProp < 100 & VBDiff > 0)
+
+# (7) EV vs VBDiff 
+ev_vbdiff <- ggplot(giraffe,aes(VBDiff,ExitVelo))+
+  geom_point(size=0.2)+
+  ggtitle(paste0(E," vs. ",VD))+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (8) EV vs VBProp 
+ev_vbprop <- ggplot(giraffe,aes(VBProp,ExitVelo))+
+  geom_point(size=0.2)+
+  ggtitle(paste0(E," vs. ",VP))+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (9) avg ev vs vb diff
+avg_ev_vbdiff <- ggplot(dw,aes(VBDiff,ExitVelo))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",VD))+labs(x=VD,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (10) avg ev vs vb prop
+avg_ev_vbprop <- ggplot(pw,aes(VBProp,ExitVelo))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0("Avg ",E," vs. ",VP))+labs(x=VP,y=E)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (11) Whiff vs VBDiff
+w_vbdiff <- ggplot(dw,aes(VBDiff,`Whiff%`))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0(W," vs. ",VD))+ylab(W)+
+  theme(plot.title = element_text(hjust =0.5))
+
+# (12) Whiff vs VBProp
+w_vbprop <- ggplot(pw,aes(VBProp,`Whiff%`))+
+  geom_smooth(method = "glm",color="red",fill="lightskyblue",size=0.2)+
+  geom_point(size=0.2)+
+  ggtitle(paste0(W," vs. ",VP))+ylab(W)+
+  theme(plot.title = element_text(hjust =0.5))
+
+cowplot::plot_grid(ev_vbdiff, ev_vbprop, 
+                   avg_ev_vbdiff, avg_ev_vbprop,
+                   w_vbdiff, w_vbprop, ncol = 2,
+                   labels = 7:12)
+```
+\newpage
+```{r}
+# (9) avg ev vs vb diff
+fit9 <- lm(ExitVelo~VBDiff, data = dw)
+summary(fit9)
+# (10) avg ev vs vb prop
+fit10 <- lm(ExitVelo~VBProp, data = pw)
+summary(fit10)
+```
+\newpage
+```{r}
+# (11) whiff vs vb diff
+fit11 <- lm(`Whiff%`~VBDiff, data = dw)
+summary(fit11)
+# (12) whiff vs vb prop
+fit12 <- lm(`Whiff%`~VBProp, data = pw)
+summary(fit12)
+```  
+\newpage
+
+
+## Comparing 1st, 2nd, and 3rd ChangeUps with 2 strikes
+```{r three change ups}
+master <- read_excel("/Users/taylorvillahermosa/Desktop/good changeups.xlsx")
+#master <- read.csv("/Users/taylorvillahermosa/Desktop/new good changeups.csv")
+
+#y <- subset(master, PitchCall != "FoulBall")
+y <- subset(y, HitType != "Bunt")
+
+y$u1EV <- NA
+y$u2EV <- NA
+y$u3EV <- NA
+y$u.num <- NA
+
+# 1 ChangeUp
+for(i in 1:(nrow(y)-2)){
+  if (y[i,"TaggedPitchType"] != "ChangeUp" &&
+      y[i+1,"TaggedPitchType"] == "ChangeUp" && 
+      y[i+2,"TaggedPitchType"] != "ChangeUp")
+      {
+        y[i+1,"u1EV"] <- y[i+1,"ExitSpeed"]
+        y[i+1,"u.num"] <- 1
+      }
+}
+
+# 2 ChangeUps in a row
+for(i in 1:(nrow(y)-3)){
+  if (y[i,"TaggedPitchType"] != "ChangeUp" && 
+      y[i+1,"TaggedPitchType"] == "ChangeUp" &&
+      y[i+2,"TaggedPitchType"] == "ChangeUp" &&
+      y[i+3,"TaggedPitchType"] != "ChangeUp"&&
+      y[i,"Batter"] == y[i+1,"Batter"]) 
+      {
+        y[i+2,"u2EV"] <- y[i+2,"ExitSpeed"]
+        y[i+1,"u.num"] <- 1
+        y[i+2,"u.num"] <- 2
+      }
+}
+
+# 3 ChangeUps in a row
+for(i in 1:(nrow(y)-3)){
+  if (y[i,"TaggedPitchType"] == "ChangeUp" && 
+      y[i+1,"TaggedPitchType"] == "ChangeUp" &&
+      y[i+2,"TaggedPitchType"] == "ChangeUp" &&
+      y[i,"Batter"] == y[i+1,"Batter"] &&
+      y[i+1,"Batter"] == y[i+2,"Batter"]) 
+      {
+        y[i+2,"u3EV"] <- y[i+2,"ExitSpeed"]
+        y[i,"u.num"] <- 1
+        y[i+1,"u.num"] <- 2
+        y[i+2,"u.num"] <- 3
+      }
+}
+
+c2 <- subset(y, Strikes == 2 & !is.na(u.num))
+
+c2 <- c2 %>% 
+  mutate(Whiff = ifelse(PitchCall=="StrikeSwinging",1,0))
+```
+\newpage
+## Comparing Whiff Rates
+```{r}
+
+potato <- c2
+master_db <- dbConnect(RSQLite::SQLite(), "master_db.sqlite")
+
+dbWriteTable(master_db,"potato",potato,overwrite=TRUE)
+
+turtle <- as.data.frame(dbGetQuery(master_db, 'SELECT "u.num",
+                                            COUNT(*) AS "PitchCount", 
+                                            SUM(Whiff) AS "WhiffCount",
+                                            SUM(Whiff)/COUNT(*)*100 AS "Whiff%"
+                                            FROM potato
+                                            GROUP BY "u.num"'))
+
+w1 <- subset(turtle$WhiffCount, turtle$u.num == 1)
+w2 <- subset(turtle$WhiffCount, turtle$u.num == 2)
+w3 <- subset(turtle$WhiffCount, turtle$u.num == 3)
+n1 <- subset(turtle$PitchCount, turtle$u.num == 1)
+n2 <- subset(turtle$PitchCount, turtle$u.num == 2)
+n3 <- subset(turtle$PitchCount, turtle$u.num == 3)
+
+
+c((whiff1 <- w1/n1),n1)  # 1st change up
+
+c((whiff2 <- w2/n2),n2)  # 2nd change up
+
+c((whiff3 <- w3/n3),n3)  # 3rd change up
+```
+### whiff rate 1 < whiff rate 2 < whiff rate 3
+```{r}
+# Whiff rate for 1st changeup is lower than 2nd with 2 strikes
+w12 <- prop.test(x = c(w1, w2), n = c(n1, n2), alternative = "less")
+c(w12$p.value,w12$conf.int)
+```
+$~$  
+```{r}
+# Whiff rate for 1st changeup is lower than 3rd with 2 strikes
+w13 <- prop.test(x = c(w1, w3), n = c(n1, n3), alternative = "less")
+c(w13$p.value,w13$conf.int)
+```
+$~$  
+```{r}
+# Whiff rate for 2nd changeup is lower than 3rd with 2 strikes
+w23 <- prop.test(x = c(w2, w3), n = c(n2, n3), alternative = "less")
+c(w23$p.value,w23$conf.int)
+```  
+\newpage
+## Comparing Exit Velos
+```{r}
+c2 <- subset(c2, PitchCall != "FoulBall")
+
+twoKev1 <- na.omit(c2$u1EV)
+twoKev2 <- na.omit(c2$u2EV)
+twoKev3 <- na.omit(c2$u3EV)
+
+c(mean(twoKev1),length(twoKev1))  # 1st change up
+c(mean(twoKev2),length(twoKev2))  # 2nd change up
+c(mean(twoKev3),length(twoKev3))  # 3rd change up
+```
+### No significant differences between Exit Velos and # of changeups in a row
+```{r}
+t.test(twoKev1, twoKev2, alternative = "greater", var.equal = FALSE)$p.value
+t.test(twoKev1, twoKev3, alternative = "two.sided", var.equal = FALSE)$p.value
+t.test(twoKev2, twoKev3, alternative = "less", var.equal = FALSE)$p.value
+```  
