@@ -1,4 +1,4 @@
-# swing-efficiency
+# strike-zones
 
 <img align="right" src="img/ncaa_strike_zone.png">
 
